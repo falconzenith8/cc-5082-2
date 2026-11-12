@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>三维竞速赛程判定器</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header>
+    <h1>三维竞速赛程判定器</h1>
+    <nav>
+      <button class="tab active" data-view="race">比赛视图</button>
+      <button class="tab" data-view="editor">赛道编辑</button>
+      <button class="tab" data-view="replay">赛程回放</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ===================================================== race view -->
+    <section id="view-race" class="view active">
+      <div class="toolbar">
+        <label>赛道
+          <select id="race-track"></select>
+        </label>
+        <label>场景
+          <select id="race-scenario"></select>
+        </label>
+        <button id="btn-run-scenario">运行内置场景</button>
+        <button id="btn-new-session">新建手动会话</button>
+        <button id="btn-step" disabled>单步推进</button>
+        <button id="btn-reset" disabled>重置车辆</button>
+      </div>
+      <div class="layout">
+        <canvas id="race-canvas" width="720" height="620"></canvas>
+        <aside class="panel">
+          <h2>路线资格</h2>
+          <div id="eligibility"></div>
+          <h2>实际判罚来源</h2>
+          <div id="penalty-ledger"></div>
+          <h2>时间记录</h2>
+          <div id="time-records"></div>
+        </aside>
+      </div>
+      <div class="panel">
+        <h2>事件 / 证据流</h2>
+        <div id="event-stream" class="stream"></div>
+      </div>
+    </section>
+
+    <!-- ==================================================== track editor -->
+    <section id="view-editor" class="view">
+      <div class="toolbar">
+        <label>加载赛道
+          <select id="editor-track"></select>
+        </label>
+        <button id="btn-load-track">加载</button>
+        <button id="btn-save-track">校验并保存</button>
+        <span id="editor-status" class="status"></span>
+      </div>
+      <div class="layout">
+        <canvas id="editor-canvas" width="720" height="620"></canvas>
+        <aside class="panel">
+          <h2>区域列表（含合法后继）</h2>
+          <div id="zone-list"></div>
+          <h2>选中区域</h2>
+          <div id="zone-editor"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ===================================================== replay view -->
+    <section id="view-replay" class="view">
+      <div class="toolbar">
+        <label>赛道
+          <select id="replay-track"></select>
+        </label>
+        <label>场景
+          <select id="replay-scenario"></select>
+        </label>
+        <button id="btn-load-replay">生成并加载回放</button>
+        <button id="btn-play">播放</button>
+        <button id="btn-pause">暂停</button>
+        <input id="replay-scrub" type="range" min="0" max="0" value="0" />
+        <span id="replay-frame">帧 0</span>
+      </div>
+      <div class="layout">
+        <canvas id="replay-canvas" width="720" height="620"></canvas>
+        <aside class="panel">
+          <h2>回放核验</h2>
+          <div id="replay-verify"></div>
+          <h2>轨迹证据</h2>
+          <div id="replay-evidence" class="stream"></div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
