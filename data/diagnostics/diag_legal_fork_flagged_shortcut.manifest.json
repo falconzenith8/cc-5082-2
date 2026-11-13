@@ -1,0 +1,12 @@
+{
+  "replay_id": "diag_legal_fork_flagged_shortcut",
+  "replay_file": "diag_legal_fork_flagged_shortcut.json",
+  "track_fingerprint": "3833764f820de138",
+  "generated_by": "tools/generate_diagnostic_cases.py",
+  "note": "positions are raw generated telemetry; the judge never rewrites them to fit a verdict",
+  "expected_category": "state_inheritance_after_geometric_miss",
+  "expected_divergence": "state_inheritance_error",
+  "description": "legal fork whose merge is later called a shortcut",
+  "reference_laps": 3,
+  "reference_valid_crossings": 16
+}

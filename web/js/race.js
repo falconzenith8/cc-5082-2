@@ -1,23 +1,32 @@
 // Live race view: run built-in scenarios or drive a manual session.
+// Lap/penalty and the trajectory position always come from the judge's actual
+// computation; anomalies are surfaced through the diagnostic panels, and every
+// penalty row can be expanded to the raw segment that produced it.
 import { api } from "./api.js";
-import { makeProjector, drawTrack, drawVehicles, drawTrajectory,
-         drawEvidenceMarkers } from "./iso.js";
+import { makeProjector, drawTrack, drawVehicles,
+         drawHighlightedSegment } from "./iso.js";
 import { vehicleColor, renderEligibility, renderPenaltyLedger,
-         renderTimeRecords, renderEventStream, renderRanking } from "./panels.js";
+         renderTimeRecords, renderEventStream, renderRanking,
+         renderAdvisory, renderBoundedSummary, renderSegmentDetail }
+  from "./panels.js";
 
 const state = {
   track: null,
   snapshot: null,
   sessionId: null,
   timer: null,
+  selectedSegment: null,
 };
 
 async function refreshTrackSelectors() {
   const { tracks } = await api.listTracks();
   const { scenarios } = await api.scenarios();
-  for (const id of ["race-track", "replay-track"]) {
+  for (const id of ["race-track", "replay-track", "replay-current-track"]) {
     const sel = document.getElementById(id);
     sel.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = ""; none.textContent = "（使用记录内嵌配置）";
+    sel.appendChild(none);
     for (const t of tracks) {
       const opt = document.createElement("option");
       opt.value = t; opt.textContent = t;
@@ -40,7 +49,7 @@ async function refreshTrackSelectors() {
   }
 }
 
-function render() {
+function renderCanvas() {
   if (!state.track || !state.snapshot) return;
   const canvas = document.getElementById("race-canvas");
   const ctx = canvas.getContext("2d");
@@ -51,10 +60,72 @@ function render() {
     drawVehicles(ctx, project,
       { [vid]: { state: d.state, color: vehicleColor(vid) } });
   }
+  if (state.selectedSegment) {
+    drawHighlightedSegment(ctx, project, state.selectedSegment);
+  }
+}
+
+function renderPanels() {
+  if (!state.snapshot) return;
   renderEligibility(document.getElementById("eligibility"), state.snapshot);
-  renderPenaltyLedger(document.getElementById("penalty-ledger"), state.snapshot);
+  renderPenaltyLedger(
+    document.getElementById("penalty-ledger"), state.snapshot,
+    state.sessionId ? onPenaltyClick : null,
+  );
   renderTimeRecords(document.getElementById("time-records"), state.snapshot);
+  renderRanking(document.getElementById("race-ranking"), state.snapshot);
   renderEventStream(document.getElementById("event-stream"), state.snapshot);
+
+  // bounded diagnostic summary rides along in every snapshot. A live session
+  // always judges under its own embedded config, so no version advisory applies.
+  const firstVid = Object.keys(state.snapshot.vehicles)[0];
+  const diag = state.snapshot.vehicles[firstVid]?.diagnostics;
+  renderAdvisory(document.getElementById("race-advisory"), null);
+  renderBoundedSummary(
+    document.getElementById("race-diag-summary"), diag,
+    state.sessionId ? ((idx) => showSegment(firstVid, idx)) : null,
+  );
+  renderSegmentDetail(
+    document.getElementById("race-segment-detail"), state.selectedSegment);
+}
+
+function render() {
+  renderCanvas();
+  renderPanels();
+}
+
+async function onPenaltyClick(vid, penalty) {
+  if (penalty.segment_index === null ||
+      penalty.segment_index === undefined) return;
+  await showSegment(vid, penalty.segment_index);
+}
+
+async function showSegment(vid, index) {
+  if (!state.sessionId) {
+    document.getElementById("race-segment-detail").textContent =
+      "内置场景快照不保留在线会话；请新建手动会话以展开原始片段。";
+    state.selectedSegment = null;
+    renderCanvas();
+    return;
+  }
+  try {
+    const out = await api.sessionDiagnostics(state.sessionId, vid, index);
+    state.selectedSegment = out.segment;
+    render();
+    if (out.recomputed) {
+      const box = document.getElementById("race-segment-detail");
+      const note = Object.assign(document.createElement("div"),
+        { className: "muted-note",
+          textContent: "该片段已按有界策略丢弃，此为从原始遥测按需重算的结果。" });
+      box.prepend(note);
+    }
+  } catch (err) {
+    const box = document.getElementById("race-segment-detail");
+    box.innerHTML = "";
+    box.appendChild(Object.assign(document.createElement("div"),
+      { className: "muted-note bad-note",
+        textContent: `片段 #${index} 无法展开：${err.message}` }));
+  }
 }
 
 async function runScenario() {
@@ -65,6 +136,7 @@ async function runScenario() {
   state.track = replay.track;
   state.snapshot = snapshot;
   state.sessionId = null;
+  state.selectedSegment = null;
   document.getElementById("btn-step").disabled = true;
   document.getElementById("btn-reset").disabled = true;
   render();
@@ -77,6 +149,7 @@ async function newSession() {
   state.sessionId = session_id;
   state.track = await api.getTrack(trackId);
   state.snapshot = snapshot;
+  state.selectedSegment = null;
   document.getElementById("btn-step").disabled = false;
   document.getElementById("btn-reset").disabled = false;
   render();

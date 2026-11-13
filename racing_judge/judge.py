@@ -10,6 +10,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
+from .diagnostics import (
+    DEC_ACCEPT,
+    DEC_BACKSIDE,
+    DEC_GAP_CROSS,
+    DEC_LONG_SEGMENT,
+    DEC_OUTSIDE_GATE,
+    DEC_PLANE_MISS,
+    DEC_RACE_START,
+    DEC_RESET,
+    DEC_REVERSE,
+    DEC_START_REENTRY,
+    DEC_TELEMETRY_GAP,
+    DecisionRecord,
+    DiagnosticRecorder,
+    ZoneAnalysisRecord,
+)
 from .geometry import Vec3, Zone
 from .model import PenaltyPolicy, RaceRules, Track
 
@@ -45,6 +61,7 @@ class Penalty:
     seconds: float
     zone_id: Optional[str]
     detail: dict = field(default_factory=dict)
+    segment_index: Optional[int] = None
 
 
 @dataclass
@@ -60,6 +77,7 @@ class CrossingEvidence:
     inside: bool
     lap_at_event: int
     invalidation: Optional[str] = None
+    segment_index: Optional[int] = None
 
 
 @dataclass
@@ -78,7 +96,8 @@ class _ZoneRuntime:
 
 
 class VehicleJudge:
-    def __init__(self, vehicle_id: str, track: Track):
+    def __init__(self, vehicle_id: str, track: Track,
+                 record_diagnostics: bool = False):
         self.vehicle_id = vehicle_id
         self.track = track
         self.rules: RaceRules = track.rules
@@ -105,6 +124,14 @@ class VehicleJudge:
         self._start_opened = False
         self._last_sample: Optional[tuple] = None  # (t, pos, connected)
         self._started = False
+        # segment diagnostics (bounded recorder; every dropped segment can be
+        # recomputed on demand from the raw telemetry)
+        self.recorder: Optional[DiagnosticRecorder] = (
+            DiagnosticRecorder() if record_diagnostics else None
+        )
+        self._segment_index = -1
+        self._active_segment: Optional[int] = None
+        self._active_penalty_start = 0
 
     # ------------------------------------------------------------------ input
     def start(self, t: float) -> None:
@@ -142,6 +169,11 @@ class VehicleJudge:
             rt.in_slab = zone.in_slab(pos)
             rt.jitter_count = 0
         self._last_sample = (t, pos, True)
+        if self.recorder is not None:
+            self.recorder.record_reset(
+                t, self._segment_index, reason,
+                pos.to_list(), rec.zone_id,
+            )
 
     def feed(
         self,
@@ -149,10 +181,13 @@ class VehicleJudge:
         pos: Vec3,
         connected: bool = True,
         force: bool = False,
+        allow_time_gap: bool = False,
     ) -> None:
         # ``force`` is used by deterministic replay: it processes exactly the
         # same frame range as the live judge regardless of when completion
         # flips, relying on _complete_lap idempotency to avoid double counts.
+        # ``allow_time_gap`` suspends time-jump gap penalties for diagnostic
+        # multi-interval replays, which deliberately resample the same path.
         if self.finished and not force:
             return
         if not self._started:
@@ -171,7 +206,7 @@ class VehicleJudge:
         # boundary.  Within a continuous disconnect stream the segment is
         # still geometrically processed (so a crossing is recorded) but its
         # intersections are invalidated rather than silently swallowed.
-        time_gap = dt > self.rules.gap_threshold_s
+        time_gap = (not allow_time_gap) and dt > self.rules.gap_threshold_s
         disconnect_boundary = (c0 and not connected) or (not c0 and connected)
         is_gap = time_gap or disconnect_boundary
         if is_gap:
@@ -186,18 +221,106 @@ class VehicleJudge:
             )
             if time_gap:
                 # no trustworthy geometry across a time jump
+                self._begin_diagnostic_segment(t0, p0, t, pos, True, dt,
+                                               allow_time_gap)
+                self._record_simple_decision(DEC_TELEMETRY_GAP, None,
+                                             {"gap_s": round(dt, 4)})
                 self._process_segment(t0, p0, t, pos, gap=True)
+                self._end_diagnostic_segment()
                 self._initialize_sides(pos)
                 return
 
         # crossing during a disconnected stream is judged but never valid
         segment_gap = is_gap or (not c0) or (not connected)
+        self._begin_diagnostic_segment(t0, p0, t, pos, segment_gap, dt,
+                                       allow_time_gap)
         if segment_gap:
             self._process_segment(t0, p0, t, pos, gap=True)
+            self._end_diagnostic_segment()
             return
 
         self.valid_driving_s += dt
         self._process_segment(t0, p0, t, pos, gap=False)
+        self._end_diagnostic_segment()
+
+    # --------------------------------------------------- diagnostic capture
+    def _begin_diagnostic_segment(self, t0, p0, t1, p1, gap, gap_s,
+                                  allow_time_gap) -> None:
+        if self.recorder is None:
+            return
+        self._segment_index += 1
+        self._active_segment = self._segment_index
+        self._active_penalty_start = len(self.penalties)
+        self.recorder.begin_segment(
+            self._segment_index, t0, p0, t1, p1, gap, gap_s,
+            allow_time_gap, self.current_lap + 1,
+            set(self.expected), set(self.passed_this_lap),
+            self._start_opened,
+        )
+        # a reset between samples marks the segment that follows it, so the
+        # recovery event is locatable from the segment timeline as well
+        attached = self.recorder._attached_resets
+        for marker in self.recorder.recovery_markers:
+            if marker.t <= t0 + 1e-9 and id(marker) not in attached:
+                self.recorder.record_decision(DecisionRecord(
+                    reason=DEC_RESET, zone_id=marker.zone_id,
+                    direction=None, detail={"reason": marker.reason},
+                ))
+                attached.add(id(marker))
+
+    def _end_diagnostic_segment(self) -> None:
+        if self.recorder is None or self._active_segment is None:
+            return
+        self.recorder.end_segment(
+            self.expected, self.passed_this_lap, self._start_opened,
+            self.penalty_ledger(), self._active_penalty_start,
+        )
+        # tag every penalty produced during this segment with its index so a
+        # clicked penalty row can open the exact originating trajectory piece
+        for pen in self.penalties[self._active_penalty_start:]:
+            if pen.segment_index is None:
+                pen.segment_index = self._active_segment
+        self._active_segment = None
+
+    def _record_zone_analysis(self, zid: str, zone: Zone, a,
+                              p0: Vec3, p1: Vec3) -> None:
+        if self.recorder is None or self._active_segment is None:
+            return
+        near_gate = False
+        route_relevant = False
+        if a.hit is not None:
+            near_gate = (
+                zone.in_plane_distance_to_gate(a.hit)
+                <= zone.gate_radius() * 2.0
+            )
+            route_relevant = (
+                zid in self.expected or zid == self.rules.start_zone
+            ) and near_gate
+        self.recorder.record_zone(ZoneAnalysisRecord(
+            zone_id=zid,
+            crossed=a.crossed,
+            direction=a.direction,
+            segment_t=a.t,
+            hit=a.hit.to_list() if a.hit else None,
+            inside=a.inside,
+            edge_distance=a.edge_distance,
+            side_a=a.side_a,
+            side_b=a.side_b,
+            signed_a=round(zone.signed_distance(p0), 6),
+            signed_b=round(zone.signed_distance(p1), 6),
+            edge_contact=a.edge_contact,
+            near_gate=near_gate,
+            route_relevant=route_relevant,
+        ))
+
+    def _record_simple_decision(self, reason: str, zone_id, detail=None,
+                                direction=None) -> None:
+        if self.recorder is None or self._active_segment is None:
+            return
+        self.recorder.record_decision(DecisionRecord(
+            reason=reason, zone_id=zone_id, direction=direction,
+            detail=detail or {},
+        ))
 
     # ------------------------------------------------------------- internals
     def _initialize_sides(self, pos: Vec3) -> None:
@@ -234,6 +357,14 @@ class VehicleJudge:
             self.events.append(
                 Event(t1, E_LONG_SEGMENT, None, {"length": round(seg_len, 3)})
             )
+            self._record_simple_decision(
+                DEC_LONG_SEGMENT, None, {"length": round(seg_len, 3)}
+            )
+            if self.recorder is not None and self._active_segment is not None:
+                # the segment itself carries the flag for bounded retention
+                open_seg = self.recorder._open
+                if open_seg is not None:
+                    open_seg["long_segment"] = True
 
         # deterministic zone order = declared configuration order
         analyses = []
@@ -242,6 +373,7 @@ class VehicleJudge:
             zone = self.zones[zid]
             analysis = zone.analyze_segment(p0, p1)
             analyses.append((zid, zone, analysis))
+            self._record_zone_analysis(zid, zone, analysis, p0, p1)
 
         # crossings are processed strictly in geometric order along segment
         crossings = [
@@ -326,11 +458,17 @@ class VehicleJudge:
                           {"edge_distance": analysis.edge_distance,
                            "direction": direction})
                 )
+                self._record_simple_decision(
+                    DEC_OUTSIDE_GATE, zid,
+                    {"edge_distance": analysis.edge_distance}, direction)
             else:
                 self.events.append(
                     Event(t, "plane_miss_ignored", zid,
                           {"edge_distance": analysis.edge_distance})
                 )
+                self._record_simple_decision(
+                    DEC_PLANE_MISS, zid,
+                    {"edge_distance": analysis.edge_distance}, direction)
             return
 
         if direction < 0:
@@ -343,6 +481,8 @@ class VehicleJudge:
                 self.evidence.append(
                     self._evidence(t, zid, analysis, False, "start_line_reentry")
                 )
+                self._record_simple_decision(
+                    DEC_START_REENTRY, zid, {"direction": -1}, direction)
                 return
             # entered from the front / exited through the back
             source = "reverse_cross" if not gap else "gap_reverse_cross"
@@ -354,6 +494,8 @@ class VehicleJudge:
             self.evidence.append(
                 self._evidence(t, zid, analysis, False, invalidation or "reverse")
             )
+            self._record_simple_decision(
+                DEC_REVERSE, zid, {"gap": gap}, direction)
             return
 
         # forward plane crossing: verify successor / backside rule
@@ -372,6 +514,8 @@ class VehicleJudge:
             self.evidence.append(
                 self._evidence(t, zid, analysis, False, "start_line_reentry")
             )
+            self._record_simple_decision(
+                DEC_START_REENTRY, zid, {"ignored": True}, direction)
             return
 
         is_backside = zid not in self.expected
@@ -390,6 +534,9 @@ class VehicleJudge:
                 self._evidence(t, zid, analysis, False,
                                invalidation or "backside_not_expected")
             )
+            self._record_simple_decision(
+                DEC_BACKSIDE, zid,
+                {"expected": sorted(self.expected), "gap": gap}, direction)
             if gap:
                 return
             # backside crossing also breaks ordering even without gap
@@ -406,6 +553,9 @@ class VehicleJudge:
             self.evidence.append(
                 self._evidence(t, zid, analysis, False, "telemetry_gap")
             )
+            self._record_simple_decision(
+                DEC_GAP_CROSS, zid, {"expected": sorted(self.expected)},
+                direction)
             return
 
         self._accept_forward(t, zid, zone, analysis)
@@ -416,6 +566,12 @@ class VehicleJudge:
         self.evidence.append(self._evidence(t, zid, analysis, True, None))
         self.events.append(Event(t, E_FORWARD, zid, {"lap": self.current_lap + 1}))
         self.laps[-1].crossings.append(zid)
+        self._record_simple_decision(
+            DEC_ACCEPT, zid,
+            {"lap": self.current_lap + 1,
+             "expected": sorted(self.expected)},
+            analysis.direction,
+        )
 
         start_id = self.rules.start_zone
         # only a start crossing after other zones were passed closes a lap
@@ -470,6 +626,8 @@ class VehicleJudge:
             Event(t, E_LAP, self.rules.start_zone,
                   {"lap": self.current_lap, "crossings": list(lap.crossings)})
         )
+        if self.recorder is not None:
+            self.recorder.close_lap(self)
         if self.current_lap >= self.rules.total_laps:
             self.finished = True
             self.finish_t = t
@@ -500,6 +658,7 @@ class VehicleJudge:
             inside=analysis.inside,
             lap_at_event=self.current_lap + 1,
             invalidation=invalidation,
+            segment_index=self._active_segment,
         )
 
     # --------------------------------------------------------------- output
@@ -534,6 +693,7 @@ class VehicleJudge:
                 "seconds": p.seconds,
                 "zone_id": p.zone_id,
                 "detail": p.detail,
+                "segment_index": p.segment_index,
             }
             for p in self.penalties
         ]
@@ -554,6 +714,13 @@ class VehicleJudge:
                 "side_a": e.side_a, "side_b": e.side_b,
                 "inside": e.inside, "lap": e.lap_at_event,
                 "invalidation": e.invalidation,
+                "segment_index": e.segment_index,
             }
             for e in self.evidence
         ]
+
+    def diagnostic_summary(self) -> Optional[dict]:
+        """Bounded per-segment diagnostic view (None when recording is off)."""
+        if self.recorder is None:
+            return None
+        return self.recorder.bounded_summary()

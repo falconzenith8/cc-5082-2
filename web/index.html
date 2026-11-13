@@ -31,20 +31,33 @@
         <button id="btn-step" disabled>单步推进</button>
         <button id="btn-reset" disabled>重置车辆</button>
       </div>
+      <div id="race-advisory" class="advisory-host"></div>
       <div class="layout">
         <canvas id="race-canvas" width="720" height="620"></canvas>
         <aside class="panel">
           <h2>路线资格</h2>
           <div id="eligibility"></div>
-          <h2>实际判罚来源</h2>
+          <h2>实际判罚来源（点击查看原始片段）</h2>
           <div id="penalty-ledger"></div>
           <h2>时间记录</h2>
           <div id="time-records"></div>
+          <h2>排名</h2>
+          <div id="race-ranking"></div>
         </aside>
       </div>
       <div class="panel">
         <h2>事件 / 证据流</h2>
         <div id="event-stream" class="stream"></div>
+      </div>
+      <div class="layout diag-layout">
+        <section class="panel">
+          <h2>赛程判定诊断 · 有界摘要</h2>
+          <div id="race-diag-summary"></div>
+        </section>
+        <section class="panel">
+          <h2>原始轨迹片段（实际求交运算）</h2>
+          <div id="race-segment-detail" class="segment-detail"></div>
+        </section>
       </div>
     </section>
 
@@ -79,11 +92,20 @@
           <select id="replay-scenario"></select>
         </label>
         <button id="btn-load-replay">生成并加载回放</button>
+        <label>对比当前赛道配置
+          <select id="replay-current-track"></select>
+        </label>
+        <label>失败样例
+          <select id="replay-case"></select>
+        </label>
+        <button id="btn-load-case" class="secondary">加载失败样例</button>
+        <button id="btn-run-diagnostics">多间隔诊断</button>
         <button id="btn-play">播放</button>
         <button id="btn-pause">暂停</button>
         <input id="replay-scrub" type="range" min="0" max="0" value="0" />
         <span id="replay-frame">帧 0</span>
       </div>
+      <div id="replay-advisory" class="advisory-host"></div>
       <div class="layout">
         <canvas id="replay-canvas" width="720" height="620"></canvas>
         <aside class="panel">
@@ -92,6 +114,22 @@
           <h2>轨迹证据</h2>
           <div id="replay-evidence" class="stream"></div>
         </aside>
+      </div>
+      <div class="layout diag-layout">
+        <section class="panel">
+          <h2>多采样间隔重放（同一轨迹，仅选取原始采样点）</h2>
+          <div id="replay-strides"></div>
+          <h2>分歧定位（点击查看原始片段）</h2>
+          <div id="replay-divergences" class="divergence-list"></div>
+        </section>
+        <section class="panel">
+          <h2>有界保留摘要</h2>
+          <div id="replay-diag-summary"></div>
+        </section>
+      </div>
+      <div class="panel">
+        <h2>原始轨迹片段（实际求交运算）</h2>
+        <div id="replay-segment-detail" class="segment-detail"></div>
       </div>
     </section>
   </main>

@@ -22,5 +22,23 @@ export const api = {
     request("POST", `/api/sessions/${sid}/step`, { controls }),
   reset: (sid, vehicle_id, reason) =>
     request("POST", `/api/sessions/${sid}/reset`, { vehicle_id, reason }),
-  verify: (replay) => request("POST", "/api/replays/verify", replay),
+  verify: (replay, current_track_id) =>
+    request("POST", "/api/replays/verify",
+      current_track_id ? { ...replay, current_track_id } : replay),
+  sessionDiagnostics: (sid, vehicle_id, segmentIndex) => {
+    let path = `/api/sessions/${sid}/diagnostics?vehicle_id=${vehicle_id}`;
+    if (segmentIndex !== undefined && segmentIndex !== null) {
+      path += `&segment_index=${segmentIndex}`;
+    }
+    return request("GET", path);
+  },
+  replayDiagnostics: (replay, opts = {}) =>
+    request("POST", "/api/replays/diagnostics", { ...replay, ...opts }),
+  replaySegment: (replay, vehicle_id, segment_index, stride = 1) =>
+    request("POST", "/api/replays/segment",
+      { ...replay, vehicle_id, segment_index, stride }),
+  diagnosticCases: () =>
+    request("GET", "/api/replays/diagnostic-cases"),
+  diagnosticCase: (replay_id) =>
+    request("GET", `/api/replays/diagnostic-cases/${replay_id}`),
 };

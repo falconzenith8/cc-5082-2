@@ -13,6 +13,12 @@ Endpoints (all JSON):
   POST /api/sessions/<sid>/reset   {vehicle_id, reason?}
   GET  /api/sessions/<sid>/replay  downloadable replay document
   POST /api/replays/verify         replay document -> re-judge comparison
+  GET  /api/sessions/<sid>/diagnostics?vehicle_id=V1[&segment_index=N]
+                                   bounded diagnostic view / one raw segment
+  POST /api/replays/diagnostics    replay doc -> multi-interval divergence report
+  POST /api/replays/segment        replay doc + index -> recomputed raw segment
+  GET  /api/replays/diagnostic-cases                 committed failure samples
+  GET  /api/replays/diagnostic-cases/<replay_id>     one failure-sample replay
 """
 
 from __future__ import annotations
@@ -22,8 +28,9 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
+from .diagnostics import analyze_replay, live_report, recompute_segment
 from .judge import VehicleJudge
 from .model import Track
 from .race import RaceSession
@@ -147,6 +154,17 @@ class ApiHandler(BaseHTTPRequestHandler):
                     return self._error("unknown session", 404)
                 return self._send(sess.replay.to_dict())
 
+            if len(parts) == 4 and parts[:2] == ["api", "sessions"] \
+                    and parts[3] == "diagnostics":
+                return self._session_diagnostics(parts[2], parse_qs(parsed.query))
+
+            if parts == ["api", "replays", "diagnostic-cases"]:
+                return self._list_diagnostic_cases()
+
+            if len(parts) == 4 and parts[:2] == ["api", "replays"] \
+                    and parts[2] == "diagnostic-cases":
+                return self._load_diagnostic_case(parts[3])
+
             return self._error("not found", 404)
         except FileNotFoundError:
             return self._error("track not found", 404)
@@ -179,6 +197,19 @@ class ApiHandler(BaseHTTPRequestHandler):
 
             if parts == ["api", "replays", "verify"]:
                 return self._verify(data)
+
+            if parts == ["api", "replays", "diagnostic-cases"]:
+                return self._list_diagnostic_cases()
+
+            if len(parts) == 4 and parts[:2] == ["api", "replays"] \
+                    and parts[2] == "diagnostic-cases":
+                return self._load_diagnostic_case(parts[3])
+
+            if parts == ["api", "replays", "diagnostics"]:
+                return self._replay_diagnostics(data)
+
+            if parts == ["api", "replays", "segment"]:
+                return self._replay_segment(data)
 
             return self._error("not found", 404)
         except json.JSONDecodeError:
@@ -284,8 +315,120 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _verify(self, data: dict) -> None:
         replay = Replay.from_dict(data)
-        report = verify_replay(replay)
+        current_track = self._optional_current_track(
+            data.get("current_track_id"), replay
+        )
+        report = verify_replay(replay, current_track=current_track)
         self._send(report)
+
+    def _optional_current_track(self, track_id, replay: Replay):
+        """Resolve the on-disk track for version comparison, if requested and
+        present; absent/unknown tracks never silently replace the embedded
+        configuration."""
+        if not track_id:
+            return None
+        try:
+            return STATE.load_track(track_id)
+        except FileNotFoundError:
+            return None
+
+    def _session_diagnostics(self, sid: str, query: dict) -> None:
+        sess = self._get_session(sid)
+        if sess is None:
+            return self._error("unknown session", 404)
+        vid = (query.get("vehicle_id") or [sess.replay.vehicles[0]])[0]
+        if vid not in sess.judges:
+            return self._error("unknown vehicle", 404)
+        judge = sess.judges[vid]
+        seg_index = query.get("segment_index")
+        if seg_index is not None:
+            try:
+                index = int(seg_index[0])
+            except ValueError:
+                return self._error("segment_index must be an integer", 400)
+            seg = judge.recorder.get_segment(index)
+            if seg is None:
+                # bounded retention dropped this plain segment; re-derive it
+                # on demand from the session's untouched raw telemetry
+                try:
+                    recomputed = recompute_segment(
+                        sess.replay, vid, index)
+                except (IndexError, LookupError) as exc:
+                    return self._error(str(exc), 404)
+                return self._send({
+                    "vehicle_id": vid,
+                    "segment": recomputed["segment"],
+                    "total_segments": recomputed["total_segments"],
+                    "recomputed": True,
+                })
+            return self._send({
+                "vehicle_id": vid,
+                "segment": seg.to_dict(),
+                "total_segments": judge.recorder.total_segments,
+                "recomputed": False,
+            })
+        self._send(live_report(judge))
+
+    def _replay_diagnostics(self, data: dict) -> None:
+        replay = Replay.from_dict(data)
+        current_track = self._optional_current_track(
+            data.get("current_track_id"), replay
+        )
+        strides = data.get("strides") or [1, 2, 4, 8]
+        report = analyze_replay(
+            replay, current_track=current_track, strides=strides
+        )
+        self._send(report)
+
+    def _replay_segment(self, data: dict) -> None:
+        replay = Replay.from_dict(data)
+        vid = data.get("vehicle_id") or replay.vehicles[0]
+        try:
+            index = int(data["segment_index"])
+        except (KeyError, TypeError, ValueError):
+            return self._error("segment_index is required", 400)
+        stride = int(data.get("stride", 1))
+        try:
+            self._send(recompute_segment(replay, vid, index, stride))
+        except (IndexError, LookupError) as exc:
+            self._error(str(exc), 404)
+
+    def _diagnostic_dir(self) -> str:
+        import os
+        return os.path.join(os.path.dirname(STATE.track_dir), "diagnostics")
+
+    def _list_diagnostic_cases(self) -> None:
+        import os
+        directory = self._diagnostic_dir()
+        cases = []
+        if os.path.isdir(directory):
+            for fn in sorted(os.listdir(directory)):
+                if not fn.endswith(".manifest.json"):
+                    continue
+                with open(os.path.join(directory, fn), encoding="utf-8") as fh:
+                    manifest = json.load(fh)
+                cases.append({
+                    "replay_id": manifest.get("replay_id"),
+                    "replay_file": manifest.get("replay_file"),
+                    "expected_category": manifest.get("expected_category"),
+                    "expected_divergence": manifest.get("expected_divergence"),
+                    "description": manifest.get("description"),
+                    "reference_laps": manifest.get("reference_laps"),
+                    "track_fingerprint": manifest.get("track_fingerprint"),
+                    "paired_track_sidecar":
+                        manifest.get("paired_track_sidecar"),
+                })
+        self._send({"cases": cases})
+
+    def _load_diagnostic_case(self, replay_id: str) -> None:
+        import os
+        safe = replay_id.replace("/", "_").replace("..", "_")
+        path = os.path.join(self._diagnostic_dir(), f"{safe}.json")
+        if not os.path.isfile(path):
+            return self._error("diagnostic case not found", 404)
+        with open(path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+        self._send(payload)
 
 
 def serve(host: str = "127.0.0.1", port: int = 8000,

@@ -42,7 +42,8 @@ class RaceSession:
     def add_vehicle(self, vid: str) -> None:
         pos = Vec3.from_iter(self.track.start_position)
         self.vehicles[vid] = Vehicle(vid, pos, self.track.start_heading)
-        self.judges[vid] = VehicleJudge(vid, self.track)
+        self.judges[vid] = VehicleJudge(vid, self.track,
+                                        record_diagnostics=True)
 
     def attach_controller(self, vid: str, controller: ScriptedController) -> None:
         self.controllers[vid] = controller
@@ -104,6 +105,7 @@ class RaceSession:
         # capture the rules actually in effect at snapshot time so an
         # independent replay re-judges under identical thresholds
         self.replay.track = self.track.to_dict()
+        self.replay.track_fingerprint = self.track.config_fingerprint()
         ranking = rank_vehicles(list(self.judges.values()), self.track) if (
             final or self._all_finished_announced
             or any(j.finished for j in self.judges.values())
@@ -118,6 +120,7 @@ class RaceSession:
                     "penalties": j.penalty_ledger(),
                     "events": j.event_log(),
                     "evidence": j.evidence_log(),
+                    "diagnostics": j.diagnostic_summary(),
                     "state": {
                         "pos": self.vehicles[vid].state.pos.to_list(),
                         "heading": self.vehicles[vid].state.heading,
@@ -129,4 +132,5 @@ class RaceSession:
             "ranking": ranking,
             "all_finished": all(j.finished for j in self.judges.values()),
             "replay_id": self.replay.replay_id,
+            "track_fingerprint": self.replay.track_fingerprint,
         }

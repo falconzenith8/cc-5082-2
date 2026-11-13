@@ -1,0 +1,288 @@
+{
+  "track_id": "fork_loop_03",
+  "name": "Fork Rejoin Loop",
+  "zones": [
+    {
+      "id": "start",
+      "name": "Start/Finish Line (south center straight)",
+      "points": [
+        [
+          -6,
+          0,
+          -28
+        ],
+        [
+          6,
+          0,
+          -28
+        ],
+        [
+          6,
+          5,
+          -28
+        ],
+        [
+          -6,
+          5,
+          -28
+        ]
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "thickness": 0.95,
+      "successors": [
+        "cp1"
+      ]
+    },
+    {
+      "id": "cp1",
+      "name": "South Gate (center straight, after start)",
+      "points": [
+        [
+          -6,
+          0,
+          -18
+        ],
+        [
+          6,
+          0,
+          -18
+        ],
+        [
+          6,
+          5,
+          -18
+        ],
+        [
+          -6,
+          5,
+          -18
+        ]
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "thickness": 0.6,
+      "successors": [
+        "cp2"
+      ]
+    },
+    {
+      "id": "cp2",
+      "name": "North Gate (center straight before fork)",
+      "points": [
+        [
+          -6,
+          0,
+          20
+        ],
+        [
+          6,
+          0,
+          20
+        ],
+        [
+          6,
+          5,
+          20
+        ],
+        [
+          -6,
+          5,
+          20
+        ]
+      ],
+      "normal": [
+        0,
+        0,
+        1
+      ],
+      "thickness": 0.6,
+      "successors": [
+        "fork_left",
+        "fork_right"
+      ]
+    },
+    {
+      "id": "fork_left",
+      "name": "Fork Left (west branch straight)",
+      "points": [
+        [
+          -50,
+          0,
+          6
+        ],
+        [
+          -38,
+          0,
+          6
+        ],
+        [
+          -38,
+          5,
+          6
+        ],
+        [
+          -50,
+          5,
+          6
+        ]
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "thickness": 0.6,
+      "successors": [
+        "merge_w"
+      ]
+    },
+    {
+      "id": "fork_right",
+      "name": "Fork Right (east branch straight)",
+      "points": [
+        [
+          38,
+          0,
+          6
+        ],
+        [
+          50,
+          0,
+          6
+        ],
+        [
+          50,
+          5,
+          6
+        ],
+        [
+          38,
+          5,
+          6
+        ]
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "thickness": 0.6,
+      "successors": [
+        "merge_e"
+      ]
+    },
+    {
+      "id": "merge_w",
+      "name": "West Rejoin (branch straight)",
+      "points": [
+        [
+          -50,
+          0,
+          -6
+        ],
+        [
+          -38,
+          0,
+          -6
+        ],
+        [
+          -38,
+          5,
+          -6
+        ],
+        [
+          -50,
+          5,
+          -6
+        ]
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "thickness": 0.6,
+      "successors": [
+        "start"
+      ]
+    },
+    {
+      "id": "merge_e",
+      "name": "East Rejoin (branch straight)",
+      "points": [
+        [
+          38,
+          0,
+          -6
+        ],
+        [
+          50,
+          0,
+          -6
+        ],
+        [
+          50,
+          5,
+          -6
+        ],
+        [
+          38,
+          5,
+          -6
+        ]
+      ],
+      "normal": [
+        0,
+        0,
+        -1
+      ],
+      "thickness": 0.6,
+      "successors": [
+        "start"
+      ]
+    }
+  ],
+  "start_position": [
+    0,
+    0,
+    -29
+  ],
+  "start_heading": 0.0,
+  "recovery": {
+    "zone_id": "cp1",
+    "position": [
+      0,
+      0,
+      -16
+    ],
+    "heading": 0.0
+  },
+  "rules": {
+    "total_laps": 3,
+    "start_zone": "start",
+    "lap_policy": "start_return",
+    "tick_hz": 30.0,
+    "max_segment_length": 12.0,
+    "gap_threshold_s": 0.25,
+    "tie_policy": "finish_event",
+    "finish_window_s": 0.05
+  },
+  "penalty_policy": {
+    "backside_seconds": 2.0,
+    "reverse_cross_seconds": 3.0,
+    "wrong_order_seconds": 5.0,
+    "edge_jitter_seconds": 1.0,
+    "jitter_sample_limit": 4,
+    "long_segment_seconds": 4.0,
+    "gap_seconds": 6.0,
+    "reset_seconds": 2.0,
+    "outside_gate_seconds": 2.0
+  }
+}

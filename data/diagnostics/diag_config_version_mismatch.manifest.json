@@ -1,0 +1,13 @@
+{
+  "replay_id": "diag_config_version_mismatch",
+  "replay_file": "diag_config_version_mismatch.json",
+  "track_fingerprint": "3833764f820de138",
+  "generated_by": "tools/generate_diagnostic_cases.py",
+  "note": "positions are raw generated telemetry; the judge never rewrites them to fit a verdict",
+  "expected_category": "config_version_mismatch",
+  "expected_divergence": null,
+  "description": "clean record under an edited configuration",
+  "paired_track_sidecar": "fork_loop_edited.json",
+  "reference_laps": 3,
+  "reference_valid_crossings": 16
+}

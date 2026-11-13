@@ -116,3 +116,60 @@ export function drawEvidenceMarkers(ctx, project, evidence) {
     ctx.fill();
   }
 }
+
+// Highlight the raw p0->p1 segment that a penalty/divergence actually used,
+// plus its plane intersection hits when zone records are supplied.
+export function drawHighlightedSegment(ctx, project, seg) {
+  if (!seg) return;
+  const a = project(seg.p0);
+  const b = project(seg.p1);
+
+  // wide translucent halo for visibility
+  ctx.strokeStyle = "#ffd16655";
+  ctx.lineWidth = 9;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+
+  ctx.strokeStyle = "#ffd166";
+  ctx.lineWidth = 3;
+  ctx.setLineDash([7, 4]);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  for (const [pt, color, label] of [[a, "#4da3ff", "p0"],
+                                    [b, "#ff6b6b", "p1"]]) {
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 10px monospace";
+    ctx.textAlign = "left";
+    ctx.fillText(label, pt.x + 7, pt.y - 6);
+  }
+
+  // plane intersection points of every zone crossed on this segment
+  for (const z of seg.zones || []) {
+    if (!z.crossed || !z.hit) continue;
+    const hp = project(z.hit);
+    ctx.beginPath();
+    ctx.arc(hp.x, hp.y, z.inside ? 4.5 : 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = z.inside ? "#37d399" : "#ff6b6b";
+    ctx.fill();
+    ctx.strokeStyle = "#0a0d12";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = z.inside ? "#37d399" : "#ff6b6b";
+    ctx.font = "10px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(z.zone_id, hp.x, hp.y - 8);
+  }
+}

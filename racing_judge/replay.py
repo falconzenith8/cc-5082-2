@@ -22,6 +22,7 @@ class Replay:
     resets: Dict[str, List[dict]] = field(default_factory=dict)
     finish_sample_index: Dict[str, int] = field(default_factory=dict)
     created_at: str = ""
+    track_fingerprint: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -32,6 +33,7 @@ class Replay:
             "telemetry": self.telemetry,
             "resets": self.resets,
             "finish_sample_index": self.finish_sample_index,
+            "track_fingerprint": self.track_fingerprint,
         }
 
     @classmethod
@@ -44,6 +46,7 @@ class Replay:
             telemetry=data["telemetry"],
             resets=data.get("resets", {}),
             finish_sample_index=data.get("finish_sample_index", {}),
+            track_fingerprint=data.get("track_fingerprint", ""),
         )
 
     def save(self, directory: str) -> str:
@@ -100,12 +103,44 @@ def replay_judge(replay: Replay) -> Dict[str, VehicleJudge]:
     return judges
 
 
-def verify_replay(replay: Replay, original: Optional[Dict[str, dict]] = None) -> dict:
-    """Re-judge the replay and compare laps/evidence with stored summaries."""
+def verify_replay(
+    replay: Replay,
+    original: Optional[Dict[str, dict]] = None,
+    current_track: Optional[Track] = None,
+) -> dict:
+    """Re-judge the replay and compare laps/evidence with stored summaries.
+
+    When ``current_track`` differs from the configuration embedded in the
+    replay, the report carries an explicit version-mismatch advisory: such
+    anomalies are configuration drift, never a player-cheating conclusion.
+    """
     judges = replay_judge(replay)
-    track = Track.from_dict(replay.track)
+    embedded = Track.from_dict(replay.track)
+    track = current_track or embedded
     ranking = rank_vehicles(list(judges.values()), track)
-    report = {"matches": True, "vehicles": {}, "ranking": ranking}
+    embedded_fp = embedded.config_fingerprint()
+    stored_fp = replay.track_fingerprint or embedded_fp
+    current_fp = track.config_fingerprint()
+    config_match = (
+        stored_fp == current_fp and embedded_fp == current_fp
+    )
+    config_report = {
+        "track_fingerprint": embedded_fp,
+        "stored_fingerprint": stored_fp,
+        "current_track_fingerprint": current_fp,
+        "config_match": config_match,
+        "config_changed_fields": track.config_diff(embedded),
+        "config_advisory": None,
+    }
+    if not config_match:
+        config_report["config_advisory"] = (
+            "checkpoint configuration changed after this record was saved; "
+            "anomalies are version mismatches, not player cheating"
+        )
+    report = {
+        "matches": True, "vehicles": {}, "ranking": ranking,
+        "config": config_report,
+    }
     for vid, judge in judges.items():
         summary = judge.progress_summary()
         evidence = judge.evidence_log()

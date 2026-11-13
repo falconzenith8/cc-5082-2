@@ -1,9 +1,14 @@
 // Replay viewer: rebuild a race from raw telemetry, scrub frame-by-frame and
 // show the independent re-judge verification against the stored result.
+// The diagnostic panels explain, from the raw segments, why a coarse replay
+// loses laps or flags a legal fork; positions are only selected, never
+// rewritten, and config drift is warned about rather than called cheating.
 import { api } from "./api.js";
 import { makeProjector, drawTrack, drawTrajectory, drawVehicles,
-         drawEvidenceMarkers } from "./iso.js";
-import { vehicleColor } from "./panels.js";
+         drawEvidenceMarkers, drawHighlightedSegment } from "./iso.js";
+import { vehicleColor, renderAdvisory, renderBoundedSummary,
+         renderSegmentDetail, renderDivergenceList, renderStrideRuns }
+  from "./panels.js";
 
 const state = {
   replay: null,
@@ -12,7 +17,14 @@ const state = {
   maxFrame: 0,
   timer: null,
   verify: null,
+  diagnostics: null,
+  selectedSegment: null,
+  selectedOrder: null,
 };
+
+function primaryVehicle() {
+  return state.replay.vehicles[0];
+}
 
 function render() {
   if (!state.track) return;
@@ -39,14 +51,21 @@ function render() {
       drawEvidenceMarkers(ctx, project, visible);
     }
   }
+  if (state.selectedSegment) {
+    drawHighlightedSegment(ctx, project, state.selectedSegment);
+  }
   document.getElementById("replay-frame").textContent =
     `帧 ${state.frame}/${state.maxFrame} · t=${currentTime().toFixed(2)}s`;
 }
 
 function currentTime() {
-  const vid = state.replay.vehicles[0];
+  const vid = primaryVehicle();
   const samples = state.replay.telemetry[vid];
   return samples[Math.min(state.frame, samples.length - 1)]?.t ?? 0;
+}
+
+function currentTrackId() {
+  return document.getElementById("replay-current-track").value || undefined;
 }
 
 function renderVerify() {
@@ -60,6 +79,16 @@ function renderVerify() {
     : "回放核验不一致 ✗";
   head.style.color = state.verify.matches ? "#37d399" : "#ff6b6b";
   box.appendChild(head);
+
+  const cfg = state.verify.config;
+  if (cfg && !cfg.config_match) {
+    renderAdvisory(
+      document.getElementById("replay-advisory"),
+      cfg.config_advisory, cfg.config_changed_fields);
+  } else {
+    renderAdvisory(document.getElementById("replay-advisory"), null);
+  }
+
   const evBox = document.getElementById("replay-evidence");
   evBox.innerHTML = "";
   for (const [vid, entry] of Object.entries(state.verify.vehicles)) {
@@ -82,22 +111,139 @@ function renderVerify() {
   }
 }
 
+function renderDiagnostics() {
+  if (!state.diagnostics) return;
+  const report = state.diagnostics;
+  renderAdvisory(
+    document.getElementById("replay-advisory"),
+    report.config_advisory, report.config_changed_fields);
+
+  const v = report.vehicles[primaryVehicle()];
+  renderStrideRuns(
+    document.getElementById("replay-strides"), v.runs, v.reference);
+  renderDivergenceList(
+    document.getElementById("replay-divergences"), v.divergences,
+    onDivergenceClick, state.selectedOrder);
+  renderBoundedSummary(
+    document.getElementById("replay-diag-summary"), v.summary,
+    (idx) => showSegment(idx, 1));
+  renderSegmentDetail(
+    document.getElementById("replay-segment-detail"), state.selectedSegment);
+
+  const catBox = document.getElementById("replay-strides");
+  if (report.divergence_total > 0) {
+    const note = document.createElement("div");
+    note.className = "muted-note";
+    note.textContent =
+      `分歧合计 ${report.divergence_total}：` +
+      Object.entries(report.divergence_categories)
+        .map(([k, n]) => `${k} ×${n}`).join("，");
+    catBox.appendChild(note);
+  }
+  const sampling = document.createElement("div");
+  sampling.className = "muted-note";
+  sampling.textContent = report.sampling_note;
+  catBox.appendChild(sampling);
+}
+
+async function onDivergenceClick(d) {
+  state.selectedOrder = d.order;
+  // the coarse segment at the first diverging stride shows the actual miss
+  const stride = d.first_diverging_stride;
+  const per = (d.per_stride || []).find((p) => p.stride === stride);
+  const coarseIndex = per ? per.coarse_segment_index : null;
+  const index = coarseIndex ?? d.reference_segment_index;
+  await showSegment(index, stride);
+  renderDivergenceList(
+    document.getElementById("replay-divergences"),
+    state.diagnostics.vehicles[primaryVehicle()].divergences,
+    onDivergenceClick, state.selectedOrder);
+}
+
+async function showSegment(index, stride = 1) {
+  if (index === null || index === undefined) return;
+  try {
+    const out = await api.replaySegment(
+      state.replay, primaryVehicle(), index, stride);
+    state.selectedSegment = out.segment;
+    render();
+    renderSegmentDetail(
+      document.getElementById("replay-segment-detail"), out.segment);
+  } catch (err) {
+    const box = document.getElementById("replay-segment-detail");
+    box.innerHTML = "";
+    box.appendChild(Object.assign(document.createElement("div"),
+      { className: "muted-note bad-note",
+        textContent: `片段 #${index} 无法重算：${err.message}` }));
+  }
+}
+
 async function loadReplay() {
   stop();
   const trackId = document.getElementById("replay-track").value;
   const scenario = document.getElementById("replay-scenario").value;
   const { replay } = await api.runScenario(trackId, scenario);
+  await adoptReplay(replay);
+}
+
+async function loadDiagnosticCase() {
+  stop();
+  const sel = document.getElementById("replay-case");
+  if (!sel.value) return;
+  const replay = await api.diagnosticCase(sel.value);
+  await adoptReplay(replay);
+}
+
+async function adoptReplay(replay) {
   state.replay = replay;
   state.track = replay.track;
-  state.verify = await api.verify(replay);
+  state.diagnostics = null;
+  state.selectedSegment = null;
+  state.selectedOrder = null;
+  state.verify = await api.verify(replay, currentTrackId());
   state.maxFrame = Math.max(
     ...replay.vehicles.map((v) => replay.telemetry[v].length - 1));
   state.frame = 0;
   const scrub = document.getElementById("replay-scrub");
   scrub.max = state.maxFrame;
   scrub.value = 0;
+  document.getElementById("replay-divergences").innerHTML = "";
+  document.getElementById("replay-diag-summary").innerHTML = "";
+  document.getElementById("replay-segment-detail").innerHTML = "";
+  document.getElementById("replay-strides").innerHTML = "";
   renderVerify();
   render();
+}
+
+async function runDiagnostics() {
+  if (!state.replay) return;
+  const opts = { strides: [1, 2, 4, 8] };
+  const trackId = currentTrackId();
+  if (trackId) opts.current_track_id = trackId;
+  state.diagnostics = await api.replayDiagnostics(state.replay, opts);
+  state.selectedSegment = null;
+  state.selectedOrder = null;
+  renderDiagnostics();
+  render();
+}
+
+async function refreshCaseSelect() {
+  const sel = document.getElementById("replay-case");
+  sel.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "（选择已提交失败样例）";
+  sel.appendChild(none);
+  try {
+    const { cases } = await api.diagnosticCases();
+    for (const c of cases) {
+      const opt = document.createElement("option");
+      opt.value = c.replay_id;
+      opt.textContent = `${c.replay_id}（${c.description || c.expected_category}）`;
+      sel.appendChild(opt);
+    }
+  } catch {
+    // diagnostic samples are optional in standalone deployments
+  }
 }
 
 function stop() {
@@ -118,8 +264,20 @@ function play() {
 }
 
 export async function initReplayView() {
+  await refreshCaseSelect();
   document.getElementById("btn-load-replay")
     .addEventListener("click", loadReplay);
+  document.getElementById("btn-load-case")
+    .addEventListener("click", loadDiagnosticCase);
+  document.getElementById("btn-run-diagnostics")
+    .addEventListener("click", runDiagnostics);
+  document.getElementById("replay-current-track")
+    .addEventListener("change", async () => {
+      if (state.replay) {
+        state.verify = await api.verify(state.replay, currentTrackId());
+        renderVerify();
+      }
+    });
   document.getElementById("btn-play").addEventListener("click", play);
   document.getElementById("btn-pause").addEventListener("click", stop);
   document.getElementById("replay-scrub").addEventListener("input", (e) => {

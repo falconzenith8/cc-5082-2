@@ -1,0 +1,12 @@
+{
+  "replay_id": "diag_high_speed_missed_lap",
+  "replay_file": "diag_high_speed_missed_lap.json",
+  "track_fingerprint": "3833764f820de138",
+  "generated_by": "tools/generate_diagnostic_cases.py",
+  "note": "positions are raw generated telemetry; the judge never rewrites them to fit a verdict",
+  "expected_category": "geometric_cross_missed_lap",
+  "expected_divergence": "geometric_cross_missed",
+  "description": "high-speed leap over the thin start slab",
+  "reference_laps": 3,
+  "reference_valid_crossings": 16
+}

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field, asdict
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .geometry import Vec3, Zone
+
+# Fields that change judging semantics; a different fingerprint means old
+# diagnostic records cannot be explained under the current configuration.
+VERSION_FIELDS = ("zones", "rules", "penalty_policy", "recovery")
 
 
 @dataclass
@@ -81,6 +86,31 @@ class Track:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def config_fingerprint(self) -> str:
+        """Stable hash of the judging-relevant configuration.
+
+        Replays store the fingerprint of the track they were judged under so a
+        later checkpoint edit can be reported as a version mismatch rather than
+        attributed to the player.
+        """
+        full = self.to_dict()
+        payload = {name: full[name] for name in VERSION_FIELDS}
+        blob = json.dumps(payload, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(blob).hexdigest()[:16]
+
+    def config_diff(self, other: "Track") -> List[str]:
+        """Top-level judging fields that differ between two configurations."""
+        a, b = self.to_dict(), other.to_dict()
+        return [name for name in VERSION_FIELDS if a[name] != b[name]]
+
+    @classmethod
+    def fingerprint_dict(cls, track_dict: dict) -> str:
+        payload = {name: track_dict.get(name) for name in VERSION_FIELDS}
+        blob = json.dumps(payload, sort_keys=True,
+                          separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(blob).hexdigest()[:16]
 
     @classmethod
     def load(cls, path: str) -> "Track":

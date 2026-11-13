@@ -1,4 +1,9 @@
-"""Command line entry: run scenarios, verify replays, inspect evidence."""
+"""Command line entry: run scenarios, verify replays, inspect evidence.
+
+The CLI is a supplementary inspection path.  Interactive judging — driving a
+vehicle, opening a penalty's raw segment, scrubbing a replay — lives in the
+in-game web interface, not here.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +12,9 @@ import json
 import os
 import sys
 
+from .diagnostics import analyze_replay, recompute_segment
 from .model import Track
-from .replay import verify_replay
+from .replay import Replay, verify_replay
 from .scenarios import SCENARIOS
 from .results import rank_vehicles
 
@@ -61,6 +67,19 @@ def main(argv=None) -> int:
     ver_p = sub.add_parser("verify", help="verify a saved replay")
     ver_p.add_argument("replay_path")
 
+    diag_p = sub.add_parser(
+        "diagnose",
+        help="multi-interval segment diagnostics for a saved replay",
+    )
+    diag_p.add_argument("replay_path")
+    diag_p.add_argument("--current-track",
+                        help="on-disk track id for version comparison")
+    diag_p.add_argument("--strides", default="1,2,4,8",
+                        help="comma-separated sample strides")
+    diag_p.add_argument("--segment", type=int, default=None,
+                        help="recompute one raw segment on demand and exit")
+    diag_p.add_argument("--vehicle", default=None)
+
     list_p = sub.add_parser("list-replays", help="list replay files")
     list_p.add_argument("--replay-dir", default="data/replays")
 
@@ -80,11 +99,30 @@ def main(argv=None) -> int:
         return 0
 
     if args.cmd == "verify":
-        from .replay import Replay
         replay = Replay.load(args.replay_path)
         report = verify_replay(replay)
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0 if report["matches"] else 1
+
+    if args.cmd == "diagnose":
+        replay = Replay.load(args.replay_path)
+        if args.segment is not None:
+            vid = args.vehicle or replay.vehicles[0]
+            out = recompute_segment(replay, vid, args.segment)
+            print(json.dumps(out, indent=2, ensure_ascii=False))
+            return 0
+        current = None
+        if args.current_track:
+            current = Track.load(
+                os.path.join(os.path.dirname(args.track) or ".",
+                             args.current_track + ".json")
+                if not os.path.exists(args.current_track)
+                else args.current_track
+            )
+        strides = [int(x) for x in args.strides.split(",") if x.strip()]
+        report = analyze_replay(replay, current_track=current, strides=strides)
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
 
     if args.cmd == "run":
         track = Track.load(args.track)
